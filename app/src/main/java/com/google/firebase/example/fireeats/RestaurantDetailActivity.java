@@ -16,9 +16,12 @@
  package com.google.firebase.example.fireeats;
 
 import android.content.Context;
+import android.content.DialogInterface;
 import android.os.Bundle;
 import android.support.annotation.NonNull;
+import android.support.design.widget.FloatingActionButton;
 import android.support.design.widget.Snackbar;
+import android.support.v7.app.AlertDialog;
 import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.LinearLayoutManager;
 import android.support.v7.widget.RecyclerView;
@@ -28,15 +31,18 @@ import android.view.ViewGroup;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.ImageView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import com.bumptech.glide.Glide;
+import com.google.android.gms.tasks.OnCompleteListener;
 import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.android.gms.tasks.Task;
-import com.google.android.gms.tasks.Tasks;
+import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.example.fireeats.adapter.RatingAdapter;
 import com.google.firebase.example.fireeats.model.Rating;
 import com.google.firebase.example.fireeats.model.Restaurant;
+import com.google.firebase.example.fireeats.util.ItemClickSupport;
 import com.google.firebase.example.fireeats.util.RestaurantUtil;
 import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.DocumentSnapshot;
@@ -45,6 +51,9 @@ import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.FirebaseFirestoreException;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.Query;
+import com.google.firebase.firestore.QueryDocumentSnapshot;
+import com.google.firebase.firestore.QuerySnapshot;
+import com.google.firebase.firestore.Transaction;
 
 import butterknife.BindView;
 import butterknife.ButterKnife;
@@ -63,6 +72,9 @@ public class RestaurantDetailActivity extends AppCompatActivity
 
     @BindView(R.id.restaurant_name)
     TextView mNameView;
+
+    @BindView(R.id.fab_show_rating_dialog)
+    FloatingActionButton showRatingFab;
 
     @BindView(R.id.restaurant_rating)
     MaterialRatingBar mRatingIndicator;
@@ -93,11 +105,15 @@ public class RestaurantDetailActivity extends AppCompatActivity
 
     private RatingAdapter mRatingAdapter;
 
+    private String currentUserId;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_restaurant_detail);
         ButterKnife.bind(this);
+
+        showRatingFab.setVisibility(View.INVISIBLE);
 
         // Get restaurant ID from extras
         String restaurantId = getIntent().getExtras().getString(KEY_RESTAURANT_ID);
@@ -117,6 +133,8 @@ public class RestaurantDetailActivity extends AppCompatActivity
                 .orderBy("timestamp", Query.Direction.DESCENDING)
                 .limit(50);
 
+        updateCurrentUserId();
+
         // RecyclerView
         mRatingAdapter = new RatingAdapter(ratingsQuery) {
             @Override
@@ -135,6 +153,32 @@ public class RestaurantDetailActivity extends AppCompatActivity
         mRatingsRecycler.setAdapter(mRatingAdapter);
 
         mRatingDialog = new RatingDialogFragment();
+
+        configureOnClickRecyclerView();
+    }
+
+    private void updateCurrentUserId() {
+        currentUserId = FirebaseAuth.getInstance().getCurrentUser().getUid();
+
+        // Check if currentUserId already rate
+        mRestaurantRef
+                .collection("ratings").whereEqualTo("userId", currentUserId)
+                .get().addOnCompleteListener(new OnCompleteListener<QuerySnapshot>() {
+            @Override
+            public void onComplete(@NonNull Task<QuerySnapshot> task) {
+                if (task.isSuccessful()) {
+                    String userId = "";
+                    for (QueryDocumentSnapshot document : task.getResult()) {
+                        userId = document.getString("userId");
+                    }
+                    if (currentUserId.equals(userId)) {
+                    } else {
+                        showRatingFab.setVisibility(View.VISIBLE);
+                    }
+
+                }
+            }
+        });
     }
 
     @Override
@@ -157,9 +201,43 @@ public class RestaurantDetailActivity extends AppCompatActivity
         }
     }
 
-    private Task<Void> addRating(final DocumentReference restaurantRef, final Rating rating) {
-        // TODO(developer): Implement
-        return Tasks.forException(new Exception("not yet implemented"));
+    private Task<Void> addRating(final DocumentReference restaurantRef,
+                                 final Rating rating) {
+        // Create reference for new rating, for use inside the transaction
+        final DocumentReference ratingRef = restaurantRef.collection("ratings")
+                .document();
+
+        // In a transaction, add the new rating and update the aggregate totals
+        return mFirestore.runTransaction(new Transaction.Function<Void>() {
+            @Override
+            public Void apply(Transaction transaction)
+                    throws FirebaseFirestoreException {
+
+                Restaurant restaurant = transaction.get(restaurantRef)
+                        .toObject(Restaurant.class);
+
+                // Compute new number of ratings
+                int newNumRatings = restaurant.getNumRatings() + 1;
+
+                // Compute new average rating
+                double oldRatingTotal = restaurant.getAvgRating() *
+                        restaurant.getNumRatings();
+                double newAvgRating = (oldRatingTotal + rating.getRating()) /
+                        newNumRatings;
+
+                // Set new restaurant info
+                restaurant.setNumRatings(newNumRatings);
+                restaurant.setAvgRating(newAvgRating);
+
+                // Commit to Firestore
+                transaction.set(restaurantRef, restaurant);
+                transaction.set(ratingRef, rating);
+
+                updateCurrentUserId();
+
+                return null;
+            }
+        });
     }
 
     /**
@@ -197,6 +275,7 @@ public class RestaurantDetailActivity extends AppCompatActivity
     @OnClick(R.id.fab_show_rating_dialog)
     public void onAddRatingClicked(View view) {
         mRatingDialog.show(getSupportFragmentManager(), RatingDialogFragment.TAG);
+        updateCurrentUserId();
     }
 
     @Override
@@ -211,6 +290,7 @@ public class RestaurantDetailActivity extends AppCompatActivity
                         // Hide keyboard and scroll to top
                         hideKeyboard();
                         mRatingsRecycler.smoothScrollToPosition(0);
+                        updateCurrentUserId();
                     }
                 })
                 .addOnFailureListener(this, new OnFailureListener() {
@@ -224,6 +304,57 @@ public class RestaurantDetailActivity extends AppCompatActivity
                                 Snackbar.LENGTH_SHORT).show();
                     }
                 });
+    }
+
+    private void configureOnClickRecyclerView(){
+        ItemClickSupport.addTo(mRatingsRecycler, R.id.recycler_ratings)
+                .setOnItemLongClickListener(new ItemClickSupport.OnItemLongClickListener() {
+                    @Override
+                    public boolean onItemLongClicked(RecyclerView recyclerView, int position, View v) {
+                        Rating rating = mRatingAdapter.getRating(position);
+                        if (rating.getUserId().equals(currentUserId)) {
+                            showDeteleDialog(position);
+                        }
+                        return false;
+                    }
+                });
+    }
+
+    private void deleteRate(int position) {
+        Rating rating = mRatingAdapter.getRating(position);
+        mRestaurantRef.collection("ratings").whereEqualTo("userId", rating.getUserId()).get().addOnCompleteListener(new OnCompleteListener<QuerySnapshot>() {
+            @Override
+            public void onComplete(@NonNull final Task<QuerySnapshot> task) {
+                if (task.isSuccessful()) {
+                    for (final QueryDocumentSnapshot document : task.getResult()) {
+                        document.getReference().delete();
+                        Toast.makeText(RestaurantDetailActivity.this, "onItemLongClicked : " + document.toObject(Rating.class).getUserId(), Toast.LENGTH_SHORT).show();
+                        //onBackPressed();
+                    }
+
+                }
+            }
+        });
+    }
+
+    private void showDeteleDialog(int position) {
+        final int cPosition = position;
+        AlertDialog.Builder builder = new AlertDialog.Builder(RestaurantDetailActivity.this);
+        builder.setTitle(R.string.delete);
+        builder.setMessage(R.string.delete_question);
+
+        // add the buttons
+        builder.setPositiveButton("Delete", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                deleteRate(cPosition);
+            }
+        });
+        builder.setNegativeButton("Cancel", null);
+
+        // create and show the alert dialog
+        AlertDialog dialog = builder.create();
+        dialog.show();
     }
 
     private void hideKeyboard() {

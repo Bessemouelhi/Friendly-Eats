@@ -37,6 +37,7 @@ public class RatingAdapter extends FirestoreAdapter<RatingAdapter.ViewHolder> {
     public RatingAdapter(Query query) {
         super(query);
     }
+    public String id;
 
     @Override
     public ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
@@ -47,6 +48,10 @@ public class RatingAdapter extends FirestoreAdapter<RatingAdapter.ViewHolder> {
     @Override
     public void onBindViewHolder(ViewHolder holder, int position) {
         holder.bind(getSnapshot(position).toObject(Rating.class));
+    }
+
+    public Rating getRating(int position) {
+        return getSnapshot(position).toObject(Rating.class);
     }
 
     static class ViewHolder extends RecyclerView.ViewHolder {
@@ -70,6 +75,8 @@ public class RatingAdapter extends FirestoreAdapter<RatingAdapter.ViewHolder> {
             ratingBar.setRating((float) rating.getRating());
             textView.setText(rating.getText());
         }
+
+
     }
 
 }

@@ -38,6 +38,8 @@
     <string name="hint_review">How was your experience?</string>
     <string name="submit">Submit</string>
     <string name="filter_add_review">Add review</string>
+    <string name="delete_question">Would you like to continue to delete this review?</string>
+    <string name="delete">Delete?</string>
 
     <!-- Types of food I could think of in 5 minutes -->
     <string-array name="categories">
